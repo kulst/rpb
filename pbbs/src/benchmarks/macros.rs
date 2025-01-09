@@ -78,20 +78,20 @@ macro_rules! define_args {
 #[macro_export]
 macro_rules! init {
     () => {
-        use rayon::prelude::*;
         use affinity::set_thread_affinity;
+        use rayon::prelude::*;
+
+        // let cores: [usize; 14] = [0, 2, 4, 6, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19];
 
         // pin rayon's threads to cores
         // TODO: find a better way to do this.
-        (0..rayon::current_num_threads())
-        .par_bridge()
-        .for_each(|_| {
-            set_thread_affinity(
-                [rayon::current_thread_index().unwrap()]
-            ).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(100))
-        })
-    }
+        // (0..rayon::current_num_threads())
+        //     .par_bridge()
+        //     .for_each(|_| {
+        //         set_thread_affinity([cores[rayon::current_thread_index().unwrap()]]).unwrap();
+        //         std::thread::sleep(std::time::Duration::from_millis(100))
+        //     })
+    };
 }
 
 #[macro_export]
@@ -100,10 +100,13 @@ macro_rules! finalize {
         if !$args.ofname.is_empty() {
             $write
         } else {
-            if $r.len() < 20 { println!("result:  {:?}", $r); }
-            else { println!("result:  {:?} ... [Ommited]", &$r[..20]); }
+            if $r.len() < 20 {
+                println!("result:  {:?}", $r);
+            } else {
+                println!("result:  {:?} ... [Ommited]", &$r[..20]);
+            }
         }
 
         println!("mean:  {:?}", $d);
-    }
+    };
 }
