@@ -25,38 +25,44 @@ use std::mem::size_of;
 // SOFTWARE.
 // ============================================================================
 
-use rayon::prelude::*;
 use num_traits::{PrimInt, ToPrimitive};
+use rayon::prelude::*;
 
-use crate::primitives::flatten_by_val;
-use crate::utilities::{log2_up, hash64};
-use crate::{maybe_uninit_vec, DefInt, Timer};
 use crate::internal::counting_sort::count_sort;
 use crate::internal::integer_sort::integer_sort_;
+use crate::primitives::flatten_by_val;
+use crate::utilities::{hash64, log2_up};
+use crate::{maybe_uninit_vec, DefInt, Timer};
 
 const CR_SEQ_THR: usize = 8192;
 const CRS_SEQ_THR: usize = 10000;
 const CACHE_PER_THREAD: usize = 1000000;
-
 
 pub trait HashEq {
     type IT;
     type KT;
     type RT;
 
-    fn hash(&self, _a: Self::KT) -> usize { todo!() }
-    fn get_key(&self, _a: Self::IT) -> Self::KT { todo!() }
+    fn hash(&self, _a: Self::KT) -> usize {
+        todo!()
+    }
+    fn get_key(&self, _a: Self::IT) -> Self::KT {
+        todo!()
+    }
 
     fn get_key_mut<'a>(&'a self, _a: &'a mut Self::RT) -> &mut Self::KT {
         todo!()
     }
 
-    fn get_key_from_result(&self, _a: Self::RT) -> Self::KT { todo!() }
-    fn equal(&self, _a: Self::KT, _b: Self::KT) -> bool { todo!() }
+    fn get_key_from_result(&self, _a: Self::RT) -> Self::KT {
+        todo!()
+    }
+    fn equal(&self, _a: Self::KT, _b: Self::KT) -> bool {
+        todo!()
+    }
 }
 
-struct GetBucket<KT: Copy + Default, HEQ>
-{
+struct GetBucket<KT: Copy + Default, HEQ> {
     hash_table: Vec<(KT, i32)>,
     table_mask: usize,
     bucket_mask: usize,
@@ -68,7 +74,7 @@ impl<IT, KT, HEQ> GetBucket<KT, HEQ>
 where
     IT: Clone + Copy,
     KT: Copy + Default + Send,
-    HEQ: HashEq<IT=IT, KT=KT>,
+    HEQ: HashEq<IT = IT, KT = KT>,
 {
     fn new(inp: &[IT], bits: usize, heq: HEQ) -> Self {
         let n = inp.len();
@@ -119,7 +125,13 @@ where
             }
         }
 
-        Self { hash_table, table_mask, bucket_mask, heavy_hitters, heq }
+        Self {
+            hash_table,
+            table_mask,
+            bucket_mask,
+            heavy_hitters,
+            heq,
+        }
     }
 
     fn op(&self, v: &IT) -> usize {
@@ -131,8 +143,7 @@ where
             }
             hash_val = hash_val & self.bucket_mask;
             if (hash_val & self.bucket_mask) < self.heavy_hitters {
-                return hash_val % (self.bucket_mask+1-self.heavy_hitters)
-                    + self.heavy_hitters
+                return hash_val % (self.bucket_mask + 1 - self.heavy_hitters) + self.heavy_hitters;
             }
             return hash_val & self.bucket_mask;
         }
@@ -150,14 +161,10 @@ pub trait RCHashEq {
     fn combine(&self, r: &mut Self::IT, inp: &[Self::IT]);
 }
 
-pub fn seq_collect_reduce<T, HEQ>(
-    inp: &[T],
-    helper: HEQ,
-    num_buckets: usize,
-    res: &mut Vec<T>
-) where
+pub fn seq_collect_reduce<T, HEQ>(inp: &[T], helper: HEQ, num_buckets: usize, res: &mut Vec<T>)
+where
     T: PrimInt + Default,
-    HEQ: RCHashEq<IT=T> + HashEq<IT=T> + Copy + Clone,
+    HEQ: RCHashEq<IT = T> + HashEq<IT = T> + Copy + Clone,
     <HEQ as HashEq>::KT: PrimInt + Default,
     <HEQ as RCHashEq>::KT: PrimInt + Default,
 {
@@ -169,20 +176,16 @@ pub fn seq_collect_reduce<T, HEQ>(
     }
 }
 
-pub fn collect_reduce_few<T, HEQ>(
-    inp: &[T],
-    helper: HEQ,
-    num_buckets: usize,
-    res: &mut Vec<T>
-) where
+pub fn collect_reduce_few<T, HEQ>(inp: &[T], helper: HEQ, num_buckets: usize, res: &mut Vec<T>)
+where
     T: PrimInt + Send + Sync + Default,
-    HEQ: RCHashEq<IT=T> + HashEq<IT=T> + Send + Sync + Copy + Clone,
+    HEQ: RCHashEq<IT = T> + HashEq<IT = T> + Send + Sync + Copy + Clone,
     <HEQ as HashEq>::KT: PrimInt + Default + Send + Sync,
     <HEQ as RCHashEq>::KT: PrimInt + Default + Send + Sync,
 {
     let n = inp.len();
     let num_threads = rayon::current_num_threads();
-    let num_blocks = (4*num_threads).min(n/num_buckets/64) + 1;
+    let num_blocks = (4 * num_threads).min(n / num_buckets / 64) + 1;
 
     // if insufficient parallelism, do sequentially
     if n < CR_SEQ_THR || num_blocks == 1 || num_threads == 1 {
@@ -193,14 +196,11 @@ pub fn collect_reduce_few<T, HEQ>(
     // partial results for each block
     let block_size = ((n - 1) / num_blocks) + 1;
     let mut out: Vec<Vec<T>> = maybe_uninit_vec![vec![]; num_blocks];
-    out
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(i, oi)| {
-            let s = i * block_size;
-            let e = n.min(s + block_size);
-            seq_collect_reduce(&inp[s..e], helper, num_buckets, oi);
-        });
+    out.par_iter_mut().enumerate().for_each(|(i, oi)| {
+        let s = i * block_size;
+        let e = n.min(s + block_size);
+        seq_collect_reduce(&inp[s..e], helper, num_buckets, oi);
+    });
 
     // comibine partial results into total result
     *res = (0..num_buckets)
@@ -211,17 +211,14 @@ pub fn collect_reduce_few<T, HEQ>(
                 helper.update(&mut o_val, out[j][i]);
             }
             o_val
-        }).collect();
+        })
+        .collect();
 }
 
-pub fn collect_reduce<T, HEQ>(
-    inp: &[T],
-    helper: HEQ,
-    num_buckets: usize,
-    res: &mut Vec<T>
-) where
+pub fn collect_reduce<T, HEQ>(inp: &[T], helper: HEQ, num_buckets: usize, res: &mut Vec<T>)
+where
     T: PrimInt + Send + Sync + Default,
-    HEQ: RCHashEq<IT=T> + HashEq<IT=T> + Send + Sync + Copy + Clone,
+    HEQ: RCHashEq<IT = T> + HashEq<IT = T> + Send + Sync + Copy + Clone,
     <HEQ as HashEq>::KT: PrimInt + Default + Send + Sync,
     <HEQ as RCHashEq>::KT: PrimInt + Default + Send + Sync,
 {
@@ -229,10 +226,7 @@ pub fn collect_reduce<T, HEQ>(
 
     let n = inp.len();
 
-    let bits = (
-        log2_up(1 + (2 * size_of::<T>() * n)
-        / CACHE_PER_THREAD) as usize
-    ).max(4);
+    let bits = (log2_up(1 + (2 * size_of::<T>() * n) / CACHE_PER_THREAD) as usize).max(4);
     let num_blocks = 1 << bits;
 
     if num_buckets <= 4 * num_blocks || n < CR_SEQ_THR {
@@ -246,15 +240,8 @@ pub fn collect_reduce<T, HEQ>(
     let mut tmp: Vec<T> = maybe_uninit_vec![T::default(); n];
 
     // first partition into blocks based on hash using a counting sort
-    let get_key = |a: T| { gb.op(&a) as DefInt };
-    let block_offsets = integer_sort_(
-        inp,
-        &mut b,
-        &mut tmp,
-        &get_key,
-        bits,
-        num_blocks
-    );
+    let get_key = |a: T| gb.op(&a) as DefInt;
+    let block_offsets = integer_sort_(inp, &mut b, &mut tmp, &get_key, bits, num_blocks);
     t.next("sort");
 
     // results
@@ -267,23 +254,18 @@ pub fn collect_reduce<T, HEQ>(
             .collect::<Vec<_>>();
 
         (0..num_blocks).into_par_iter().for_each(|i| {
-            let slice =
-                &b[block_offsets[i] as usize..block_offsets[i+1] as usize];
+            let slice = &b[block_offsets[i] as usize..block_offsets[i + 1] as usize];
 
-            if i < gb.heavy_hitters {   // heavy hitters with all equal keys
+            if i < gb.heavy_hitters {
+                // heavy hitters with all equal keys
                 let k = helper.get_key(slice[0]).to_usize().unwrap();
-                helper.combine(
-                    &mut sums[k].lock().unwrap(),
-                    slice
-                );
-            } else {    // shared blocks
+                helper.combine(&mut sums[k].lock().unwrap(), slice);
+            } else {
+                // shared blocks
                 for j in 0..slice.len() {
                     let k = helper.get_key(slice[j]).to_usize().unwrap();
                     debug_assert!(k < num_buckets);
-                    helper.update(
-                        &mut sums[k].lock().unwrap(),
-                        helper.get_val(slice[j])
-                    );
+                    helper.update(&mut sums[k].lock().unwrap(), helper.get_val(slice[j]));
                 }
             }
         });
@@ -298,22 +280,20 @@ pub fn collect_reduce<T, HEQ>(
             .collect::<Vec<_>>();
 
         (0..num_blocks).into_par_iter().for_each(|i| {
-            let slice =
-                &b[block_offsets[i] as usize..block_offsets[i+1] as usize];
+            let slice = &b[block_offsets[i] as usize..block_offsets[i + 1] as usize];
 
-            if i < gb.heavy_hitters {   // heavy hitters with all equal keys
+            if i < gb.heavy_hitters {
+                // heavy hitters with all equal keys
                 let k = helper.get_key(slice[0]).to_usize().unwrap();
-                helper.combine(
-                    unsafe { &mut *(sums.as_ptr().add(k) as *mut T) },
-                    slice
-                );
-            } else {    // shared blocks
+                helper.combine(unsafe { &mut *(sums.as_ptr().add(k) as *mut T) }, slice);
+            } else {
+                // shared blocks
                 for j in 0..slice.len() {
                     let k = helper.get_key(slice[j]).to_usize().unwrap();
                     debug_assert!(k < num_buckets);
                     helper.update(
                         unsafe { &mut *(sums.as_ptr().add(k) as *mut T) },
-                        helper.get_val(slice[j])
+                        helper.get_val(slice[j]),
                     );
                 }
             }
@@ -323,8 +303,6 @@ pub fn collect_reduce<T, HEQ>(
         *res = sums;
     }
 }
-
-
 
 pub trait RCSHashEq {
     type IT;
@@ -336,15 +314,11 @@ pub trait RCSHashEq {
     fn update(&self, r: &mut Self::RT, inp: Self::IT);
 }
 
-pub fn seq_collect_reduce_sparse<T, R, HEQ>(
-    inp: &[T],
-    helper: HEQ,
-    res: &mut Vec<R>
-)
+pub fn seq_collect_reduce_sparse<T, R, HEQ>(inp: &[T], helper: HEQ, res: &mut Vec<R>)
 where
     T: Send + Sync + Clone + Copy + Default,
     R: Send + Sync + Clone + Copy + Default,
-    HEQ: RCSHashEq<IT=T, RT=R> + HashEq<IT=T, RT=R> + Send + Sync,
+    HEQ: RCSHashEq<IT = T, RT = R> + HashEq<IT = T, RT = R> + Send + Sync,
     <HEQ as HashEq>::KT: Copy + Default + Send + Sync,
     <HEQ as RCSHashEq>::KT: Copy + Default + Send + Sync,
 {
@@ -357,18 +331,15 @@ where
     for j in 0..inp.len() {
         let key = helper.get_key(inp[j]);
         let mut k: usize = helper.hash(key) % table_size;
-        while
-            flags[k]
-            && !helper.equal(helper.get_key_from_result(table[k]), key)
-        {
-            k = if k + 1 == table_size { 0 }  else { k + 1 } ;
+        while flags[k] && !helper.equal(helper.get_key_from_result(table[k]), key) {
+            k = if k + 1 == table_size { 0 } else { k + 1 };
         }
 
         if flags[k] {
             helper.update(&mut table[k], inp[j]);
         } else {
             flags[k] = true;
-            count+=1;
+            count += 1;
             helper.init(&mut table[k], inp[j]);
             *helper.get_key_mut(&mut table[k]) = helper.get_key(inp[j]);
         }
@@ -378,24 +349,26 @@ where
     let mut r: Vec<R> = maybe_uninit_vec![R::default(); count];
     let mut j = 0usize;
     for i in 0..table_size {
-        if flags[i] { r[j] = table[i]; j+=1; }}
+        if flags[i] {
+            r[j] = table[i];
+            j += 1;
+        }
+    }
     debug_assert_eq!(j, count);
 
     *res = r;
 }
 
-pub fn collect_reduce_sparse<T, R, HEQ>(
-    inp: &[T],
-    helper: HEQ,
-    res: &mut Vec<R>
-) where
+pub fn collect_reduce_sparse<T, R, HEQ>(inp: &[T], helper: HEQ, res: &mut Vec<R>)
+where
     T: Copy + Eq + Send + Sync + Default,
     R: Copy + Send + Sync + Default,
-    HEQ: RCSHashEq<IT=T, RT=R> + HashEq<IT=T, RT=R> + Send + Sync + Copy + Clone,
+    HEQ: RCSHashEq<IT = T, RT = R> + HashEq<IT = T, RT = R> + Send + Sync + Copy + Clone,
     <HEQ as HashEq>::KT: Copy + Default + Send + Sync,
     <HEQ as RCSHashEq>::KT: Copy + Default + Send + Sync,
 {
-    let mut t = Timer::new("collect reduce sparse"); //t.start();
+    let mut t = Timer::new("collect reduce sparse");
+    t.start();
 
     let n = inp.len();
     if n < CRS_SEQ_THR {
@@ -405,28 +378,26 @@ pub fn collect_reduce_sparse<T, R, HEQ>(
     }
 
     let bits = log2_up(
-        (1.0 + (1.2 * 2.0 * size_of::<T>() as f64 * n as f64)
-        / CACHE_PER_THREAD as f64) as usize
-    ).max(4);
+        (1.0 + (1.2 * 2.0 * size_of::<T>() as f64 * n as f64) / CACHE_PER_THREAD as f64) as usize,
+    )
+    .max(4);
     let num_buckets = 1 << bits;
 
     let gb = GetBucket::new(inp, bits, helper);
+    t.next("get_bucket");
 
     let mut b: Vec<T> = maybe_uninit_vec![T::default(); n];
     #[allow(unused_mut)]
-    let keys: Vec<usize> = (0..n)
-        .into_par_iter()
-        .map(|i| gb.op(&inp[i]))
-        .collect();
-    let (bucket_offsets, _) = count_sort(inp, &mut b, &keys, num_buckets, 1.0);
+    let key_getter = |i: usize| gb.op(&inp[i]);
+    t.next("tabulate");
+    let (bucket_offsets, _) = count_sort(inp, &mut b, key_getter, num_buckets, 1.0);
     t.next("integer sort");
 
     let heavy_cutoff = gb.heavy_hitters;
     let tables: Vec<Vec<R>> = (0..num_buckets)
         .into_par_iter()
         .map(|i| {
-            let block =
-                &b[bucket_offsets[i] as usize..bucket_offsets[i+1] as usize];
+            let block = &b[bucket_offsets[i] as usize..bucket_offsets[i + 1] as usize];
             if i < heavy_cutoff {
                 vec![helper.reduce(block)]
             } else {
@@ -434,7 +405,8 @@ pub fn collect_reduce_sparse<T, R, HEQ>(
                 seq_collect_reduce_sparse(&block, helper, &mut r);
                 r
             }
-        }).collect();
+        })
+        .collect();
     t.next("block hash");
 
     // flatten the results

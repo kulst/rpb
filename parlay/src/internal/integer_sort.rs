@@ -25,27 +25,28 @@ use std::mem::size_of;
 // SOFTWARE.
 // ============================================================================
 
-use std::slice::from_raw_parts;
-use rayon::prelude::*;
 use enhanced_rayon::prelude::*;
+use rayon::prelude::*;
+use std::slice::from_raw_parts;
 
-use crate::{DefInt, maybe_uninit_vec};
-use crate::utilities::log2_up;
 use crate::internal::counting_sort::{count_sort, seq_count_sort_};
+use crate::utilities::log2_up;
+use crate::{maybe_uninit_vec, DefInt};
 
 const RADIX: usize = 8;
 const MAX_BUCKETS: usize = 1 << RADIX;
-
 
 fn seq_radix_sort_<T: Copy, F: Fn(T) -> DefInt>(
     inp: &mut [T],
     out: &mut [T],
     g: &F,
     bits: usize,
-    inplace: bool
+    inplace: bool,
 ) {
     let n = inp.len();
-    if n == 0 { return; }
+    if n == 0 {
+        return;
+    }
     let mut counts = [0; MAX_BUCKETS + 1];
     let mut swapped = false;
     let mut bit_offset = 0;
@@ -56,16 +57,11 @@ fn seq_radix_sort_<T: Copy, F: Fn(T) -> DefInt>(
         let mask = num_buckets - 1;
 
         if swapped {
-            let keys: Vec<_> = (0..n)
-                .map(|i| (g(out[i]) >> bit_offset) & mask)
-                .collect();
-            seq_count_sort_(out, inp, &keys, &mut counts, num_buckets as usize);
-        }
-        else {
-            let keys: Vec<_> = (0..n)
-                .map(|i| (g(inp[i]) >> bit_offset) & mask)
-                .collect();
-            seq_count_sort_(inp, out, &keys, &mut counts, num_buckets as usize);
+            let keys: Vec<_> = (0..n).map(|i| (g(out[i]) >> bit_offset) & mask).collect();
+            seq_count_sort_(out, inp, |i| *&keys[i], &mut counts, num_buckets as usize);
+        } else {
+            let keys: Vec<_> = (0..n).map(|i| (g(inp[i]) >> bit_offset) & mask).collect();
+            seq_count_sort_(inp, out, |i| *&keys[i], &mut counts, num_buckets as usize);
         }
 
         bits = bits - round_bits;
@@ -73,24 +69,30 @@ fn seq_radix_sort_<T: Copy, F: Fn(T) -> DefInt>(
         swapped = !swapped;
     }
 
-    if swapped && inplace { inp.copy_from_slice(out); }
-    else if !swapped && !inplace { out.copy_from_slice(inp); }
+    if swapped && inplace {
+        inp.copy_from_slice(out);
+    } else if !swapped && !inplace {
+        out.copy_from_slice(inp);
+    }
 }
-
 
 pub fn seq_radix_sort<T: Copy, F: Fn(T) -> DefInt>(
     inp: &[T],
     out: &mut [T],
     tmp: &mut [T],
     g: &F,
-    key_bits: usize
+    key_bits: usize,
 ) {
     let odd = ((key_bits - 1) / RADIX) & 1 == 1;
     if odd {
-        if tmp.as_ptr() != inp.as_ptr() { tmp.copy_from_slice(inp); }
+        if tmp.as_ptr() != inp.as_ptr() {
+            tmp.copy_from_slice(inp);
+        }
         seq_radix_sort_(tmp, out, g, key_bits, false)
     } else {
-        if out.as_ptr() != inp.as_ptr() { out.copy_from_slice(inp); }
+        if out.as_ptr() != inp.as_ptr() {
+            out.copy_from_slice(inp);
+        }
         seq_radix_sort_(out, tmp, g, key_bits, true)
     }
 }
@@ -102,8 +104,9 @@ pub fn integer_sort_r<T, F>(
     g: &F,
     key_bits: usize,
     num_buckets: usize,
-    parallelism: f32
-) -> Vec<DefInt> where
+    parallelism: f32,
+) -> Vec<DefInt>
+where
     F: Fn(T) -> DefInt + Sync + Send,
     T: Copy + Send + Sync,
 {
@@ -127,37 +130,45 @@ pub fn integer_sort_r<T, F>(
     // single parallel count sort for few bits
     else if key_bits <= base_bits {
         let mask = (1 << key_bits) - 1;
-        let get_bits: Vec<_> = inp
-            .into_par_iter()
-            .map(|&i| g(i) & mask)
-            .collect();
-        let num_bkts = if num_buckets == 0 {1 << key_bits} else {num_buckets};
+        let get_bits: Vec<_> = inp.into_par_iter().map(|&i| g(i) & mask).collect();
+        let num_bkts = if num_buckets == 0 {
+            1 << key_bits
+        } else {
+            num_buckets
+        };
 
-        let (offsets, _) = count_sort(inp, out, &get_bits, num_bkts, parallelism);
+        let (offsets, _) = count_sort(inp, out, |i| *&get_bits[i], num_bkts, parallelism);
 
-        if return_offsets {return offsets;} else {return vec![]};
-    }
-    else { // recursive case:
+        if return_offsets {
+            return offsets;
+        } else {
+            return vec![];
+        };
+    } else {
+        // recursive case:
         let bits = 8;
         let shift_bits = key_bits - bits;
         let num_outer_buckets = 1usize << bits;
-        let num_inner_buckets =
-            if return_offsets { 1usize << shift_bits } else { 0 };
+        let num_inner_buckets = if return_offsets {
+            1usize << shift_bits
+        } else {
+            0
+        };
         let mask = num_outer_buckets as DefInt - 1;
-        let f = |i: usize| { (g(inp[i]) >> shift_bits) & mask };
+        let f = |i: usize| (g(inp[i]) >> shift_bits) & mask;
         let get_bits = (0..n).into_par_iter().map(f).collect::<Vec<_>>();
 
-        let (offsets, one_bucket) = count_sort(
-            inp, out, &get_bits, num_outer_buckets, 1.0);
+        let (offsets, one_bucket) = count_sort(inp, out, |i| *&get_bits[i], num_outer_buckets, 1.0);
 
         // if all but one bucket are empty, try again on lower bits
         if one_bucket {
             return integer_sort_r(inp, out, tmp, g, shift_bits, 0, parallelism);
         }
 
-        let mut inner_offsets =
-            vec![0; if return_offsets { num_buckets + 1 } else { 0 }];
-        if return_offsets { inner_offsets[num_buckets] = n as DefInt; }
+        let mut inner_offsets = vec![0; if return_offsets { num_buckets + 1 } else { 0 }];
+        if return_offsets {
+            inner_offsets[num_buckets] = n as DefInt;
+        }
 
         let mut helper_vec = vec![0; offsets.len()];
         let iter = out.par_ind_chunks_mut(&offsets);
@@ -166,8 +177,7 @@ pub fn integer_sort_r<T, F>(
         } else {
             iter.zip(helper_vec.par_chunks_mut(1))
         };
-        iter
-            .zip(tmp.par_ind_chunks_mut(&offsets))
+        iter.zip(tmp.par_ind_chunks_mut(&offsets))
             .zip(offsets.par_iter())
             .with_gran(1)
             .for_each(|(((oc, ioc), tc), oi)| {
@@ -178,14 +188,13 @@ pub fn integer_sort_r<T, F>(
                     g,
                     shift_bits,
                     num_inner_buckets,
-                    (parallelism * oc.len() as f32) / (n+1) as f32
+                    (parallelism * oc.len() as f32) / (n + 1) as f32,
                 );
 
                 if return_offsets {
-                    ioc
-                        .iter_mut()
+                    ioc.iter_mut()
                         .zip(r.iter())
-                        .for_each(|(io, ri)| *io = oi + ri );
+                        .for_each(|(io, ri)| *io = oi + ri);
                 }
             });
 
@@ -199,29 +208,20 @@ pub fn integer_sort_<T, F>(
     tmp: &mut [T],
     get_key: &F,
     mut bits: usize,
-    num_buckets: usize
-) -> Vec<DefInt> where
+    num_buckets: usize,
+) -> Vec<DefInt>
+where
     F: Fn(T) -> DefInt + Sync + Send,
     T: Copy + Send + Sync,
 {
     if bits == 0 {
-        bits = log2_up(
-            inp
-                .par_iter()
-                .map(|&k| get_key(k) as DefInt)
-                .max()
-                .unwrap() as usize
-            );
+        bits = log2_up(inp.par_iter().map(|&k| get_key(k) as DefInt).max().unwrap() as usize);
     }
     integer_sort_r(inp, out, tmp, get_key, bits, num_buckets, 1.0)
 }
 
-pub fn integer_sort<T, F>(
-    inp: &[T],
-    get_key: &F,
-    bits: usize,
-    out: &mut Vec<T>
-) where
+pub fn integer_sort<T, F>(inp: &[T], get_key: &F, bits: usize, out: &mut Vec<T>)
+where
     F: Fn(T) -> DefInt + Sync + Send,
     T: Copy + Send + Sync,
 {
