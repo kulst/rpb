@@ -368,7 +368,7 @@ where
     <HEQ as RCSHashEq>::KT: Copy + Default + Send + Sync,
 {
     let mut t = Timer::new("collect reduce sparse");
-    t.start();
+    //t.start();
 
     let n = inp.len();
     if n < CRS_SEQ_THR {

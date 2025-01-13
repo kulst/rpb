@@ -83,6 +83,8 @@ macro_rules! init {
 
         // let cores: [usize; 14] = [0, 2, 4, 6, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19];
 
+        // let builder = ThreadPoolBuilder;
+        // builder.
         // pin rayon's threads to cores
         // TODO: find a better way to do this.
         // (0..rayon::current_num_threads())

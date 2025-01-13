@@ -40,27 +40,11 @@ where
     F: Fn(usize) -> K,
     K: ToPrimitive,
 {
-    let n = inp.len();
-    // local counts to avoid false sharing
-    let mut lcnt = vec![0; num_buckets];
-    (0..n).map(|i| keys(i)).for_each(|k| {
+    (0..inp.len()).map(|i| keys(i)).for_each(|k| {
         let k = k.to_usize().unwrap();
         debug_assert!(k < num_buckets);
-        lcnt[k] += 1;
+        counts[k] += 1;
     });
-
-    // repeat_n(keys()
-    // keys[..n]
-    //     .iter()
-    //     .for_each(|k| {
-    //         let k = k.to_usize().unwrap();
-    //         debug_assert!(k < num_buckets);
-    //         lcnt[k] += 1;
-    //     });
-    counts[..num_buckets]
-        .iter_mut()
-        .zip(lcnt.iter())
-        .for_each(|(a, b)| *a = *b);
 }
 
 fn seq_write_<K, T, F>(inp: &[T], key_getter: F, offsets: &[usize], num_buckets: usize)
@@ -69,11 +53,12 @@ where
     F: Fn(usize) -> K,
     K: ToPrimitive,
 {
-    let mut local_offsets = maybe_uninit_vec![0; num_buckets];
-    local_offsets
-        .iter_mut()
-        .zip(offsets.iter())
-        .for_each(|(a, b)| *a = *b);
+    let mut local_offsets = offsets.to_vec();
+    // //maybe_uninit_vec![0; num_buckets];
+    // local_offsets
+    //     .iter_mut()
+    //     .zip(offsets.iter())
+    //     .for_each(|(a, b)| *a = *b);
 
     inp.iter()
         .zip((0..).map(|i| key_getter(i)))
@@ -113,7 +98,9 @@ pub(crate) fn seq_count_sort_<K, T, F>(
     F: Fn(usize) -> K + Clone + Copy,
     K: ToPrimitive,
 {
-    seq_count_(inp, key_getter, counts, num_buckets);
+    let mut lcl_counts = counts.to_vec();
+    seq_count_(inp, key_getter, &mut lcl_counts, num_buckets);
+    counts.clone_from_slice(&lcl_counts);
 
     // generate offsets
     let mut s = 0;
@@ -159,11 +146,12 @@ where
     if n == 0 {
         return (vec![], false);
     }
-    let num_threads = rayon::current_num_threads();
+    //let num_threads = rayon::current_num_threads();
 
     let num_blocks = 1 + n * size_of::<T>() / 5000.max(num_buckets * 500);
 
-    if n < SEQ_THRESHOLD || num_blocks == 1 || num_threads == 1 {
+    if n < SEQ_THRESHOLD || num_blocks == 1 {
+        //|| num_threads == 1 {
         return (seq_count_sort(inp, out, key_getter, num_buckets), false);
     }
 
@@ -177,28 +165,36 @@ where
         .zip(inp.par_chunks(block_size))
         .enumerate()
         .for_each(|(chunk_idx, (cnt_chunk, inp_chunk))| {
+            let mut cnt_chunk_vec = cnt_chunk.to_vec();
             seq_count_(
                 inp_chunk,
                 |i: usize| key_getter(chunk_idx * block_size + i),
-                cnt_chunk,
+                cnt_chunk_vec.as_mut_slice(),
                 num_buckets,
-            )
+            );
+            cnt_chunk.clone_from_slice(&cnt_chunk_vec);
         });
 
     // aggregate blocks counts and calculate offsets
-    let mut bucket_offsets = maybe_uninit_vec![0; num_buckets + 1];
-    bucket_offsets[..num_buckets]
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(i, dst)| {
-            let mut v = 0;
-            for j in 0..num_blocks {
-                v += counts[j * num_buckets + i];
-            }
-            *dst = v;
-        });
-    bucket_offsets[num_buckets] = 0;
-
+    // let mut bucket_offsets = maybe_uninit_vec![0; num_buckets + 1];
+    // bucket_offsets[..num_buckets]
+    //     .par_iter_mut()
+    //     .enumerate()
+    //     .for_each(|(i, dst)| {
+    //         let mut v = 0;
+    //         for j in 0..num_blocks {
+    //             v += counts[j * num_buckets + i];
+    //         }
+    //         *dst = v;
+    //     });
+    // bucket_offsets[num_buckets] = 0;
+    // aggregate blocks counts and calculate offsets
+    let mut bucket_offsets = Vec::with_capacity(num_buckets + 1);
+    (0..num_buckets)
+        .into_par_iter()
+        .map(|index| counts.iter().skip(index).step_by(num_buckets).sum())
+        .collect_into_vec(&mut bucket_offsets);
+    bucket_offsets.push(0);
     // scan (prefix sum) on offsets array
     let _t = scan_inplace(&mut bucket_offsets, false, |a, b| a + b);
     debug_assert_eq!(_t as usize, n);
