@@ -25,12 +25,17 @@ use std::time::Duration;
 // SOFTWARE.
 // ============================================================================
 
+#[path = "mod.rs"]
+mod dedup;
+#[path = "../../common/io.rs"]
+mod io;
+#[path = "../macros.rs"]
+mod macros;
+#[path = "../../misc.rs"]
+mod misc;
 
-#[path ="mod.rs"] mod dedup;
-#[path ="../../misc.rs"] mod misc;
-#[path ="../macros.rs"] mod macros;
-#[path ="../../common/io.rs"] mod io;
-
+use affinity::get_thread_affinity;
+use affinity::set_thread_affinity;
 use dedup::parlay_hash;
 use io::{read_big_file_to_vec, write_slice_to_file_seq};
 
@@ -39,7 +44,7 @@ define_algs!((PARHASH, "parhash"));
 
 pub fn run(alg: Algs, rounds: usize, arr: &[u32]) -> (Vec<u32>, Duration) {
     let f = match alg {
-        Algs::PARHASH => {parlay_hash::dedup},
+        Algs::PARHASH => parlay_hash::dedup,
     };
 
     let mut r = vec![];
@@ -49,28 +54,43 @@ pub fn run(alg: Algs, rounds: usize, arr: &[u32]) -> (Vec<u32>, Duration) {
         "dedup",
         rounds,
         Duration::new(1, 0),
-        || { unsafe { *(r_ptr as *mut Vec<u32>).as_mut().unwrap() = vec![]; } },
-        || { f(&arr, &mut r); },
-        || {}
+        || unsafe {
+            *(r_ptr as *mut Vec<u32>).as_mut().unwrap() = vec![];
+        },
+        || {
+            f(&arr, &mut r);
+        },
+        || {},
     );
     (r, mean)
 }
 
 fn main() {
     init!();
+    use rayon::ThreadPoolBuilder;
+
+    let thread_ids = get_thread_affinity().unwrap();
+    let thread_ids2 = thread_ids.clone();
+    println!("{:?}", thread_ids);
+    let builder = ThreadPoolBuilder::new();
+    builder
+        .start_handler(move |tb| {
+            set_thread_affinity([thread_ids2[tb]]).unwrap();
+        })
+        .num_threads(thread_ids.len())
+        .build_global()
+        .unwrap();
+
     let args = Args::parse();
     let mut arr = Vec::new();
     read_big_file_to_vec(
         &args.ifname,
-        Some { 0: |w: &[&str]| {debug_assert_eq!(w[0], "sequenceInt")} },
-        &mut arr
+        Some {
+            0: |w: &[&str]| debug_assert_eq!(w[0], "sequenceInt"),
+        },
+        &mut arr,
     );
     let (r, d) = run(args.algorithm, args.rounds, &arr);
 
-    finalize!(
-        args,
-        r,
-        d,
-        write_slice_to_file_seq(&r, args.ofname)
-    );
+    finalize!(args, r, d, write_slice_to_file_seq(&r, args.ofname));
 }
