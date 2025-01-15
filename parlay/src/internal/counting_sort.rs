@@ -1,4 +1,5 @@
 use std::mem::{size_of, ManuallyDrop, MaybeUninit};
+use std::ops::AddAssign;
 // ============================================================================
 // This code is part of RPB.
 // ----------------------------------------------------------------------------
@@ -43,7 +44,7 @@ where
     (0..inp.len()).map(|i| keys(i)).for_each(|k| {
         let k = k.to_usize().unwrap();
         debug_assert!(k < num_buckets);
-        counts[k] += 1;
+        unsafe { counts.get_unchecked_mut(k).add_assign(1) };
     });
 }
 
@@ -66,9 +67,12 @@ where
             let k = k.to_usize().unwrap();
             // reading a raw_pointer
             unsafe {
-                *(local_offsets[k] as *mut T) = *i;
+                *(*local_offsets.get_unchecked(k) as *mut T) = *i;
+
+                local_offsets
+                    .get_unchecked_mut(k)
+                    .add_assign(size_of::<T>());
             }
-            local_offsets[k] += size_of::<T>();
         });
 }
 
@@ -227,8 +231,9 @@ where
                     (dest_offsets.as_ptr() as *mut usize)
                         .add(j * num_buckets + i)
                         .write(v);
+
+                    v += *counts.get_unchecked(j * num_buckets + i) as usize * size_of::<T>();
                 }
-                v += counts[j * num_buckets + i] as usize * size_of::<T>();
             }
         });
 

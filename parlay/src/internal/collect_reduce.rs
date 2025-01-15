@@ -137,7 +137,7 @@ where
     fn op(&self, v: &IT) -> usize {
         let mut hash_val = self.heq.hash(self.heq.get_key(*v));
         if self.heavy_hitters > 0 {
-            let h = &self.hash_table[hash_val & self.table_mask];
+            let h = unsafe { &self.hash_table.get_unchecked(hash_val & self.table_mask) };
             if h.1 != -1 && self.heq.equal(h.0, self.heq.get_key(*v)) {
                 return h.1 as usize;
             }
@@ -324,39 +324,51 @@ where
 {
     let table_size = 3 * inp.len() / 2;
     let mut count = 0usize;
-    let mut table: Vec<R> = maybe_uninit_vec![R::default(); table_size];
+    let mut table: Vec<R> = vec![R::default(); table_size];
     let mut flags = vec![false; table_size];
 
     // hash into buckets
     for j in 0..inp.len() {
-        let key = helper.get_key(inp[j]);
+        let key = helper.get_key(unsafe { *inp.get_unchecked(j) });
         let mut k: usize = helper.hash(key) % table_size;
-        while flags[k] && !helper.equal(helper.get_key_from_result(table[k]), key) {
+        while unsafe { *flags.get_unchecked(k) }
+            && !helper.equal(
+                helper.get_key_from_result(unsafe { *table.get_unchecked(k) }),
+                key,
+            )
+        {
             k = if k + 1 == table_size { 0 } else { k + 1 };
         }
 
         if flags[k] {
-            helper.update(&mut table[k], inp[j]);
+            unsafe { helper.update(table.get_unchecked_mut(k), *inp.get_unchecked(j)) };
         } else {
             flags[k] = true;
             count += 1;
-            helper.init(&mut table[k], inp[j]);
-            *helper.get_key_mut(&mut table[k]) = helper.get_key(inp[j]);
+            unsafe {
+                helper.init(table.get_unchecked_mut(k), *inp.get_unchecked(j));
+                *helper.get_key_mut(table.get_unchecked_mut(k)) =
+                    helper.get_key(*inp.get_unchecked(j));
+            }
         }
     }
 
     // pack non-empty entries of table into result sequence
-    let mut r: Vec<R> = maybe_uninit_vec![R::default(); count];
+    let mut r_vec: Vec<R> = Vec::with_capacity(count);
+    let r = r_vec.spare_capacity_mut();
     let mut j = 0usize;
     for i in 0..table_size {
-        if flags[i] {
-            r[j] = table[i];
-            j += 1;
+        unsafe {
+            if *flags.get_unchecked(i) {
+                r.get_unchecked_mut(j).write(*table.get_unchecked(i));
+                j += 1;
+            }
         }
     }
+    unsafe { r_vec.set_len(count) };
     debug_assert_eq!(j, count);
 
-    *res = r;
+    *res = r_vec;
 }
 
 pub fn collect_reduce_sparse<T, R, HEQ>(inp: &[T], helper: HEQ, res: &mut Vec<R>)
@@ -388,7 +400,7 @@ where
 
     let mut b: Vec<T> = Vec::with_capacity(n);
     #[allow(unused_mut)]
-    let key_getter = |i: usize| gb.op(&inp[i]);
+    let key_getter = |i: usize| gb.op(unsafe { &inp.get_unchecked(i) });
     t.next("tabulate");
     let (bucket_offsets, _) =
         count_sort_uninit(inp, b.spare_capacity_mut(), key_getter, num_buckets, 1.0);
@@ -399,8 +411,11 @@ where
     let heavy_cutoff = gb.heavy_hitters;
     let tables: Vec<Vec<R>> = (0..num_buckets)
         .into_par_iter()
-        .map(|i| {
-            let block = &b[bucket_offsets[i] as usize..bucket_offsets[i + 1] as usize];
+        .map(|i| unsafe {
+            let block = &b.get_unchecked(
+                *bucket_offsets.get_unchecked(i) as usize
+                    ..*bucket_offsets.get_unchecked(i + 1) as usize,
+            );
             if i < heavy_cutoff {
                 vec![helper.reduce(block)]
             } else {
