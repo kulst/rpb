@@ -1,4 +1,4 @@
-use std::mem::size_of;
+use std::mem::{size_of, ManuallyDrop, MaybeUninit};
 // ============================================================================
 // This code is part of RPB.
 // ----------------------------------------------------------------------------
@@ -28,7 +28,7 @@ use std::mem::size_of;
 use num_traits::{PrimInt, ToPrimitive};
 use rayon::prelude::*;
 
-use crate::internal::counting_sort::count_sort;
+use crate::internal::counting_sort::count_sort_uninit;
 use crate::internal::integer_sort::integer_sort_;
 use crate::primitives::flatten_by_val;
 use crate::utilities::{hash64, log2_up};
@@ -386,12 +386,15 @@ where
     let gb = GetBucket::new(inp, bits, helper);
     t.next("get_bucket");
 
-    let mut b: Vec<T> = maybe_uninit_vec![T::default(); n];
+    let mut b: Vec<T> = Vec::with_capacity(n);
     #[allow(unused_mut)]
     let key_getter = |i: usize| gb.op(&inp[i]);
     t.next("tabulate");
-    let (bucket_offsets, _) = count_sort(inp, &mut b, key_getter, num_buckets, 1.0);
+    let (bucket_offsets, _) =
+        count_sort_uninit(inp, b.spare_capacity_mut(), key_getter, num_buckets, 1.0);
     t.next("integer sort");
+
+    unsafe { b.set_len(n) };
 
     let heavy_cutoff = gb.heavy_hitters;
     let tables: Vec<Vec<R>> = (0..num_buckets)
